@@ -23,6 +23,12 @@ export function DeviceSection({
   onModeChange,
   onRefresh,
 }: DeviceSectionProps) {
+  const modeButtonClassName =
+    "min-h-9 font-bold disabled:cursor-not-allowed disabled:opacity-55 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-500";
+  const selectedModeButtonClassName =
+    "bg-blue-100 text-blue-900 shadow-inner ring-1 ring-inset ring-blue-300";
+  const unselectedModeButtonClassName = "bg-slate-50 text-slate-600 hover:bg-slate-100";
+
   return (
     <section
       className="flex flex-col gap-3.5 rounded-lg border border-slate-200 bg-white p-4"
@@ -46,8 +52,8 @@ export function DeviceSection({
       <div className="grid grid-cols-2 overflow-hidden rounded-lg border border-slate-300">
         <button
           type="button"
-          className={`min-h-9 bg-slate-50 font-bold text-slate-600 disabled:cursor-not-allowed disabled:opacity-55 ${
-            mode === "system_default" ? "bg-blue-600 text-white" : ""
+          className={`${modeButtonClassName} ${
+            mode === "system_default" ? selectedModeButtonClassName : unselectedModeButtonClassName
           }`}
           onClick={() => onModeChange("system_default")}
           disabled={pending}
@@ -56,8 +62,8 @@ export function DeviceSection({
         </button>
         <button
           type="button"
-          className={`min-h-9 border-l border-slate-300 bg-slate-50 font-bold text-slate-600 disabled:cursor-not-allowed disabled:opacity-55 ${
-            mode === "fixed_device" ? "bg-blue-600 text-white" : ""
+          className={`${modeButtonClassName} border-l border-slate-300 ${
+            mode === "fixed_device" ? selectedModeButtonClassName : unselectedModeButtonClassName
           }`}
           onClick={() => onModeChange("fixed_device")}
           disabled={pending || devices.length === 0}
