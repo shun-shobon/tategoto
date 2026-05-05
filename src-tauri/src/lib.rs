@@ -12,7 +12,7 @@ mod tray;
 use std::{sync::Arc, time::Duration};
 
 use model::{AppModel, SharedState, TranscriptionStatus};
-use tauri::Manager;
+use tauri::{ActivationPolicy, Manager, WindowEvent};
 
 const MODEL: &str = "gpt-4o-mini-transcribe";
 const TRAY_ID: &str = "main";
@@ -26,6 +26,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            app.set_activation_policy(ActivationPolicy::Accessory);
             let paths = app_paths::build_paths(app.handle())?;
             let settings = settings::load_settings(&paths.config_file)?;
             let shared = SharedState {
@@ -38,6 +39,7 @@ pub fn run() {
                 paths,
             };
             app.manage(Arc::new(shared));
+            keep_main_window_in_tray(app.handle());
             tray::setup_tray(app.handle())?;
             Ok(())
         })
@@ -52,4 +54,16 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn keep_main_window_in_tray(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let window_to_hide = window.clone();
+        window.on_window_event(move |event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window_to_hide.hide();
+            }
+        });
+    }
 }
