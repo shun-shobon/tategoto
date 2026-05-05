@@ -113,8 +113,11 @@ curl -sS https://api.openai.com/v1/realtime/transcription_sessions \
   -d '{
     "input_audio_format": "pcm16",
     "input_audio_transcription": {
-      "model": "gpt-4o-transcribe"
+      "model": "gpt-4o-transcribe",
+      "language": "ja",
+      "prompt": "Tategoto, Codex, Tauri, Realtime API"
     },
+    "input_audio_noise_reduction": null,
     "turn_detection": {
       "type": "server_vad",
       "threshold": 0.5,
@@ -127,6 +130,12 @@ curl -sS https://api.openai.com/v1/realtime/transcription_sessions \
 Successful responses have `object: "realtime.transcription_session"` and include
 `client_secret.value`. Treat that value as sensitive. It is an ephemeral key for
 the WebSocket client connection.
+
+`language` and `prompt` are optional. Leave them unset to let the API infer the
+language and run without transcription hints. `input_audio_noise_reduction` can
+be `null`, `{ "type": "near_field" }`, or `{ "type": "far_field" }`. Tategoto
+defaults to `null` so the first run does not apply extra noise reduction unless
+the user selects it.
 
 ### Diarization Model Check
 
@@ -236,7 +245,8 @@ async function createSession(model) {
     },
     body: JSON.stringify({
       input_audio_format: "pcm16",
-      input_audio_transcription: { model },
+      input_audio_transcription: { model, language: "ja" },
+      input_audio_noise_reduction: null,
       turn_detection: {
         type: "server_vad",
         threshold: 0.5,
