@@ -1,6 +1,5 @@
 use std::{path::PathBuf, sync::Arc};
 
-use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -102,13 +101,6 @@ impl Serialize for CommandError {
     {
         serializer.serialize_str(&self.to_string())
     }
-}
-
-#[derive(Debug)]
-pub(crate) struct PendingChunk {
-    pub(crate) pcm: Vec<u8>,
-    pub(crate) local_start: DateTime<Local>,
-    pub(crate) local_end: DateTime<Local>,
 }
 
 pub(crate) type SharedAppState = Arc<SharedState>;

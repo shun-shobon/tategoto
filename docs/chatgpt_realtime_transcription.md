@@ -82,20 +82,21 @@ not a comfortable target. For robust handling, create a new session before the
 limit is reached, such as every 50 to 55 minutes, and stitch transcripts by
 local timestamps.
 
-Do not send a one-hour recording as a single committed audio item. The
+Do not send a one-hour recording as a single transcript unit. The
 `gpt-4o-transcribe` model card lists a 16,000 token context window and 2,000 max
 output tokens, and one hour of ordinary speech can exceed that output size. Use
-VAD or manual chunking so each `input_audio_buffer.commit` covers a short
-utterance or a few minutes at most. This keeps each
-`conversation.item.input_audio_transcription.completed` event small and preserves
-ordering through `item_id` and `previous_item_id`.
+VAD or manual chunking so each completed audio item covers a short utterance or
+a few minutes at most. This keeps each
+`conversation.item.input_audio_transcription.completed` event small and
+preserves ordering through `item_id` and `previous_item_id`.
 
 Practical recommendation for one-hour prerecorded audio with the ChatGPT bearer
 token:
 
 1. Use Realtime transcription, because it is the path verified with this auth.
 2. Decode the source file locally and stream PCM16 mono 24 kHz chunks.
-3. Commit frequently, either at VAD-detected pauses or fixed windows with overlap.
+3. Let server-side VAD commit at detected pauses, or commit manually at fixed
+   windows with overlap.
 4. Start a replacement Realtime session before 60 minutes if the source may run
    longer than the session limit.
 5. Store local offsets per committed item, then concatenate completed transcripts
@@ -112,20 +113,15 @@ curl -sS https://api.openai.com/v1/realtime/transcription_sessions \
   -d '{
     "input_audio_format": "pcm16",
     "input_audio_transcription": {
-      "model": "gpt-4o-mini-transcribe"
+      "model": "gpt-4o-transcribe"
     },
-    "turn_detection": null
+    "turn_detection": {
+      "type": "server_vad",
+      "threshold": 0.5,
+      "prefix_padding_ms": 300,
+      "silence_duration_ms": 700
+    }
   }'
-```
-
-`gpt-4o-transcribe` can be used in the same field:
-
-```json
-{
-  "input_audio_transcription": {
-    "model": "gpt-4o-transcribe"
-  }
-}
 ```
 
 Successful responses have `object: "realtime.transcription_session"` and include
@@ -199,16 +195,15 @@ Send PCM16 mono 24 kHz audio as base64 chunks:
 { "type": "input_audio_buffer.append", "audio": "<base64 pcm16 audio>" }
 ```
 
-Commit the current buffer when a segment is ready:
-
-```json
-{ "type": "input_audio_buffer.commit" }
-```
+With `server_vad`, the server decides when speech has ended and commits the
+buffer automatically.
 
 Expected server events:
 
 ```text
 transcription_session.created
+input_audio_buffer.speech_started
+input_audio_buffer.speech_stopped
 input_audio_buffer.committed
 conversation.item.created
 conversation.item.input_audio_transcription.delta
@@ -242,7 +237,12 @@ async function createSession(model) {
     body: JSON.stringify({
       input_audio_format: "pcm16",
       input_audio_transcription: { model },
-      turn_detection: null,
+      turn_detection: {
+        type: "server_vad",
+        threshold: 0.5,
+        prefix_padding_ms: 300,
+        silence_duration_ms: 700,
+      },
     }),
   });
 
@@ -263,7 +263,6 @@ async function transcribe(model) {
 
   ws.addEventListener("open", () => {
     ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: pcmBase64 }));
-    ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
   });
 
   ws.addEventListener("message", (event) => {
@@ -282,7 +281,7 @@ async function transcribe(model) {
   });
 }
 
-transcribe("gpt-4o-mini-transcribe").catch((error) => {
+transcribe("gpt-4o-transcribe").catch((error) => {
   console.error(error);
   process.exit(1);
 });
@@ -292,11 +291,12 @@ transcribe("gpt-4o-mini-transcribe").catch((error) => {
 
 - This path is stream-oriented. It can process prerecorded audio, but the client
   must split or append audio data over WebSocket and wait for transcript events.
-- `input_audio_buffer.commit` requires at least 100 ms of audio.
+- If manual commits are used instead of server-side VAD, `input_audio_buffer.commit`
+  requires at least 100 ms of audio.
 - The tested format was PCM16, mono, 24 kHz, little-endian.
-- `gpt-4o-transcribe` and `gpt-4o-mini-transcribe` both worked for session
-  creation and WebSocket transcription flow. Test output depends on the audio
-  content; non-speech audio may return an empty transcript.
+- The app currently uses `gpt-4o-transcribe` with server-side VAD. Test output
+  depends on the audio content; non-speech audio may return no completed
+  transcript segment.
 - `gpt-4o-transcribe-diarize` could not be validated with this bearer token. To
   verify speaker labels, the expected successful response shape is
   `diarized_json` with `segments[]` containing `speaker`, `start`, `end`, and

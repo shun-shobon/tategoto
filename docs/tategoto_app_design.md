@@ -184,7 +184,7 @@ Markdown の例:
 JSONL の例:
 
 ```jsonl
-{"type":"transcript_segment","local_start":"2026-05-05T09:15:02+09:00","local_end":"2026-05-05T09:15:18+09:00","session_id":"sess_...","item_id":"item_...","previous_item_id":null,"model":"gpt-4o-mini-transcribe","text":"今日の作業はまず設計書の見直しから始めます。","received_at":"2026-05-05T09:15:19+09:00"}
+{"type":"transcript_segment","local_start":"2026-05-05T09:15:02+09:00","local_end":"2026-05-05T09:15:18+09:00","session_id":"sess_...","item_id":"item_...","previous_item_id":null,"model":"gpt-4o-transcribe","text":"今日の作業はまず設計書の見直しから始めます。","received_at":"2026-05-05T09:15:19+09:00"}
 ```
 
 保存時に最低限持つ情報は次の通り。

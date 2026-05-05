@@ -14,13 +14,11 @@ use std::{sync::Arc, time::Duration};
 use model::{AppModel, SharedState, TranscriptionStatus};
 use tauri::{ActivationPolicy, Manager, WindowEvent};
 
-const MODEL: &str = "gpt-4o-mini-transcribe";
+const MODEL: &str = "gpt-4o-transcribe";
 const TRAY_ID: &str = "main";
 const TARGET_SAMPLE_RATE: u32 = 24_000;
 const TARGET_CHANNELS: u16 = 1;
-const CHUNK_SECONDS: i64 = 15;
 const ROTATE_AFTER: Duration = Duration::from_secs(50 * 60);
-const COMPLETION_WAIT: Duration = Duration::from_secs(60);
 
 pub fn run() {
     tauri::Builder::default()

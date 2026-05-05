@@ -13,7 +13,6 @@ use crate::{
 #[derive(Debug)]
 pub(crate) struct AudioBlock {
     pub(crate) pcm: Vec<u8>,
-    pub(crate) duration: Duration,
 }
 
 #[derive(Debug)]
@@ -189,9 +188,7 @@ fn send_audio_block(
     sender: &mpsc::Sender<AudioBlock>,
 ) {
     let pcm = resample_to_pcm16_mono(samples, sample_rate, channels);
-    let frames = pcm.len() / 2;
-    let duration = Duration::from_secs_f64(frames as f64 / TARGET_SAMPLE_RATE as f64);
-    let _ = sender.try_send(AudioBlock { pcm, duration });
+    let _ = sender.try_send(AudioBlock { pcm });
 }
 
 fn resample_to_pcm16_mono(samples: &[f32], source_rate: u32, source_channels: u16) -> Vec<u8> {
@@ -262,6 +259,5 @@ mod tests {
         capture.stop();
 
         assert!(!block.pcm.is_empty());
-        assert!(block.duration > Duration::ZERO);
     }
 }
