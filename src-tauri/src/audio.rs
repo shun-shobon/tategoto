@@ -262,6 +262,7 @@ mod tests {
             input_device_mode: InputDeviceMode::FixedDevice,
             input_device_id: Some("missing-device-id".to_string()),
             input_device_name: Some("Missing Device".to_string()),
+            ..Settings::default()
         };
 
         let error = match resolve_input_device(&settings) {

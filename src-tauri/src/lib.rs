@@ -14,7 +14,6 @@ use std::{sync::Arc, time::Duration};
 use model::{AppModel, SharedState, TranscriptionStatus};
 use tauri::{ActivationPolicy, Manager, WindowEvent};
 
-const MODEL: &str = "gpt-4o-transcribe";
 const TRAY_ID: &str = "main";
 const TARGET_SAMPLE_RATE: u32 = 24_000;
 const TARGET_CHANNELS: u16 = 1;

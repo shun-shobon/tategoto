@@ -12,7 +12,7 @@ use tokio_tungstenite::{
     tungstenite::{Message, client::IntoClientRequest},
 };
 
-use crate::{MODEL, audio::AudioBlock, transcript::TranscriptSegment};
+use crate::{audio::AudioBlock, model::TranscriptionSettings, transcript::TranscriptSegment};
 
 pub(crate) const MIN_COMMIT_AUDIO_DURATION: Duration = Duration::from_millis(100);
 
@@ -45,6 +45,7 @@ struct ChatGptTokens {
 
 pub(crate) struct RealtimeConnection {
     session: SessionCredentials,
+    transcription_model: String,
     socket: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
@@ -107,8 +108,12 @@ struct TurnTiming {
 }
 
 impl RealtimeConnection {
-    pub(crate) async fn connect(http: &Client, token: &str) -> anyhow::Result<Self> {
-        let session = create_transcription_session(http, token).await?;
+    pub(crate) async fn connect(
+        http: &Client,
+        token: &str,
+        settings: &TranscriptionSettings,
+    ) -> anyhow::Result<Self> {
+        let session = create_transcription_session(http, token, settings).await?;
         let mut request =
             "wss://api.openai.com/v1/realtime?intent=transcription".into_client_request()?;
         request.headers_mut().insert(
@@ -120,7 +125,11 @@ impl RealtimeConnection {
             .parse()?,
         );
         let (socket, _) = connect_async(request).await?;
-        Ok(Self { session, socket })
+        Ok(Self {
+            session,
+            transcription_model: settings.model.as_str().to_string(),
+            socket,
+        })
     }
 
     pub(crate) async fn append_audio(&mut self, pcm: Vec<u8>) -> anyhow::Result<()> {
@@ -164,29 +173,19 @@ impl RealtimeConnection {
             _ => return Ok(RealtimeEvent::Ignored),
         };
         let value: serde_json::Value = serde_json::from_str(&text)?;
-        handle_server_event(value, &self.session.id, timeline)
+        handle_server_event(value, &self.session.id, &self.transcription_model, timeline)
     }
 }
 
 async fn create_transcription_session(
     http: &Client,
     token: &str,
+    settings: &TranscriptionSettings,
 ) -> anyhow::Result<SessionCredentials> {
     let response = http
         .post("https://api.openai.com/v1/realtime/transcription_sessions")
         .bearer_auth(token)
-        .json(&json!({
-            "input_audio_format": "pcm16",
-            "input_audio_transcription": {
-                "model": MODEL
-            },
-            "turn_detection": {
-                "type": "server_vad",
-                "threshold": 0.5,
-                "prefix_padding_ms": 300,
-                "silence_duration_ms": 700
-            }
-        }))
+        .json(&transcription_session_payload(settings))
         .send()
         .await?;
 
@@ -201,6 +200,47 @@ async fn create_transcription_session(
         id: session.id,
         client_secret: session.client_secret.value,
     })
+}
+
+fn transcription_session_payload(settings: &TranscriptionSettings) -> serde_json::Value {
+    let mut transcription = serde_json::Map::from_iter([(
+        "model".to_string(),
+        serde_json::Value::String(settings.model.as_str().to_string()),
+    )]);
+
+    if let Some(language) = trimmed_non_empty(settings.language.as_deref()) {
+        transcription.insert(
+            "language".to_string(),
+            serde_json::Value::String(language.to_string()),
+        );
+    }
+    if let Some(prompt) = trimmed_non_empty(settings.prompt.as_deref()) {
+        transcription.insert(
+            "prompt".to_string(),
+            serde_json::Value::String(prompt.to_string()),
+        );
+    }
+
+    let noise_reduction = settings.noise_reduction.as_ref().map_or(
+        serde_json::Value::Null,
+        |noise_reduction| json!({ "type": noise_reduction.as_str() }),
+    );
+
+    json!({
+        "input_audio_format": "pcm16",
+        "input_audio_transcription": transcription,
+        "input_audio_noise_reduction": noise_reduction,
+        "turn_detection": {
+            "type": "server_vad",
+            "threshold": settings.turn_detection.threshold,
+            "prefix_padding_ms": settings.turn_detection.prefix_padding_ms,
+            "silence_duration_ms": settings.turn_detection.silence_duration_ms
+        }
+    })
+}
+
+fn trimmed_non_empty(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 pub(crate) fn read_chatgpt_token() -> anyhow::Result<String> {
@@ -238,6 +278,7 @@ fn audio_offset_to_local_time(
 fn handle_server_event(
     value: serde_json::Value,
     session_id: &str,
+    transcription_model: &str,
     timeline: &mut RealtimeTimeline,
 ) -> anyhow::Result<RealtimeEvent> {
     match value.get("type").and_then(serde_json::Value::as_str) {
@@ -282,7 +323,7 @@ fn handle_server_event(
                 session_id: session_id.to_string(),
                 item_id,
                 previous_item_id: timing.previous_item_id,
-                model: MODEL.to_string(),
+                model: transcription_model.to_string(),
                 text,
                 received_at: Local::now(),
             }))
@@ -342,6 +383,7 @@ mod tests {
                     "audio_start_ms": 1_000
                 }),
                 "sess_test",
+                "gpt-4o-mini-transcribe",
                 &mut timeline,
             )
             .unwrap(),
@@ -355,6 +397,7 @@ mod tests {
                     "audio_end_ms": 2_500
                 }),
                 "sess_test",
+                "gpt-4o-mini-transcribe",
                 &mut timeline,
             )
             .unwrap(),
@@ -368,6 +411,7 @@ mod tests {
                     "previous_item_id": "item_previous"
                 }),
                 "sess_test",
+                "gpt-4o-mini-transcribe",
                 &mut timeline,
             )
             .unwrap(),
@@ -382,6 +426,7 @@ mod tests {
                 "transcript": "  こんにちは  "
             }),
             "sess_test",
+            "gpt-4o-mini-transcribe",
             &mut timeline,
         )
         .unwrap() else {
@@ -391,6 +436,7 @@ mod tests {
         assert_eq!(segment.session_id, "sess_test");
         assert_eq!(segment.item_id, "item_test");
         assert_eq!(segment.previous_item_id, Some("item_previous".to_string()));
+        assert_eq!(segment.model, "gpt-4o-mini-transcribe");
         assert_eq!(segment.text, "こんにちは");
         assert_eq!(
             segment.local_start.format("%H:%M:%S").to_string(),
@@ -431,10 +477,72 @@ mod tests {
                 }
             }),
             "sess_test",
+            "gpt-4o-transcribe",
             &mut timeline,
         )
         .unwrap();
 
         assert!(matches!(event, RealtimeEvent::CommitRejected(_)));
+    }
+
+    #[test]
+    fn builds_default_transcription_session_payload() {
+        let payload = transcription_session_payload(&TranscriptionSettings::default());
+
+        assert_eq!(payload["input_audio_format"], "pcm16");
+        assert_eq!(
+            payload["input_audio_transcription"],
+            json!({ "model": "gpt-4o-transcribe" })
+        );
+        assert_eq!(
+            payload["input_audio_noise_reduction"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            payload["turn_detection"],
+            json!({
+                "type": "server_vad",
+                "threshold": 0.5,
+                "prefix_padding_ms": 300,
+                "silence_duration_ms": 700
+            })
+        );
+    }
+
+    #[test]
+    fn builds_custom_transcription_session_payload() {
+        let payload = transcription_session_payload(&TranscriptionSettings {
+            model: crate::model::TranscriptionModel::Gpt4oMiniTranscribe,
+            language: Some(" ja ".to_string()),
+            prompt: Some(" Tategoto, Codex ".to_string()),
+            noise_reduction: Some(crate::model::NoiseReductionType::FarField),
+            turn_detection: crate::model::TurnDetectionSettings {
+                threshold: 0.7,
+                prefix_padding_ms: 500,
+                silence_duration_ms: 900,
+            },
+        });
+
+        assert_eq!(
+            payload["input_audio_transcription"],
+            json!({
+                "model": "gpt-4o-mini-transcribe",
+                "language": "ja",
+                "prompt": "Tategoto, Codex"
+            })
+        );
+        assert_eq!(
+            payload["input_audio_noise_reduction"],
+            json!({ "type": "far_field" })
+        );
+        assert_eq!(
+            payload["turn_detection"],
+            json!({
+                "type": "server_vad",
+                "threshold": 0.7,
+                "prefix_padding_ms": 500,
+                "silence_duration_ms": 900
+            })
+        );
     }
 }

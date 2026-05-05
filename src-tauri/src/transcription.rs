@@ -84,9 +84,9 @@ async fn run_transcription(
 ) -> anyhow::Result<()> {
     let token = read_chatgpt_token()?;
     let (audio_tx, mut audio_rx) = mpsc::channel::<AudioBlock>(64);
-    let mut audio_capture = Some(start_audio_capture(settings, audio_tx)?);
+    let mut audio_capture = Some(start_audio_capture(settings.clone(), audio_tx)?);
     let http = Client::new();
-    let mut ws = RealtimeConnection::connect(&http, &token).await?;
+    let mut ws = RealtimeConnection::connect(&http, &token, &settings.transcription).await?;
     let mut timeline = RealtimeTimeline::new();
     let mut session_started_at = Instant::now();
 
@@ -133,7 +133,7 @@ async fn run_transcription(
                     deferred_audio.push(block);
                 }
                 ws.close().await;
-                ws = RealtimeConnection::connect(&http, &token).await?;
+                ws = RealtimeConnection::connect(&http, &token, &settings.transcription).await?;
                 timeline = RealtimeTimeline::new();
                 for block in deferred_audio {
                     append_audio_block(&mut ws, &mut timeline, block).await?;
