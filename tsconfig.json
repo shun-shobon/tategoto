@@ -1,0 +1,8 @@
+{
+  "extends": ["@tsconfig/vite-react/tsconfig.json", "@tsconfig/strictest/tsconfig.json"],
+  "compilerOptions": {
+    "exactOptionalPropertyTypes": false,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,42 @@
+{
+  "name": "tategoto",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MacOS menu bar transcription app that saves microphone transcripts locally.",
+  "license": "MIT",
+  "author": "NISHIZAWA Shuntaro <me@s2n.tech>",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite --host 127.0.0.1",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "tauri": "tauri",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "4.2.4",
+    "@tauri-apps/api": "2.11.0",
+    "@tauri-apps/plugin-opener": "2.5.4",
+    "@vitejs/plugin-react": "6.0.1",
+    "lucide-react": "1.14.0",
+    "react": "19.2.5",
+    "react-dom": "19.2.5",
+    "tailwindcss": "4.2.4",
+    "vite": "8.0.10"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.0",
+    "@tsconfig/strictest": "2.0.8",
+    "@tsconfig/vite-react": "7.0.2",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "oxfmt": "0.47.0",
+    "oxlint": "1.62.0",
+    "oxlint-tsgolint": "0.22.1",
+    "typescript": "6.0.3"
+  },
+  "packageManager": "pnpm@11.0.4"
+}
