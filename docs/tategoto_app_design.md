@@ -130,10 +130,15 @@ Rust 側で cpal の入力 stream を作り、デバイスの default input conf
 `i16`、`u16` である。
 
 音声は cpal callback ごとの block として Realtime WebSocket に
-`input_audio_buffer.append` で送る。現状ではクライアント側で固定長 chunk を組み立てたり、
-明示的に `input_audio_buffer.commit` を送ったりしない。turn detection は session 作成時に
-server VAD を指定し、speech start / stop / committed / completed event から transcript の
-時間情報を組み立てる。
+`input_audio_buffer.append` で送る。クライアント側では固定長 chunk を組み立てず、通常時は
+session 作成時に指定した server VAD に commit を任せる。
+
+停止時と session 張り替え時だけ、未確定の audio buffer が 100ms 以上ある場合に
+`input_audio_buffer.commit` を明示的に送る。commit 後は completed event を最大 10 秒待ち、
+保存できた transcript を Markdown / JSONL に追記してから session を閉じる。
+
+transcript の時間情報は、audio block の capture 時刻と Realtime event の audio offset から
+組み立てる。offset が取れない場合は現在時刻で補う。
 
 マイク権限がない場合や input stream を開始できない場合は録音開始に失敗する。現状では
 権限設定画面への誘導は行わず、エラーとして表示する。
@@ -145,14 +150,18 @@ Realtime transcription session は 50 分ごとに張り替える。
 現在の張り替え処理は次の通り。
 
 1. 状態を `rotating_session` にする
-2. 現 session の WebSocket を閉じる
-3. 新しい transcription session を作る
-4. timeline を初期化する
-5. 状態を `recording` に戻す
+2. 旧 session へ送信待ちの audio block を drain する
+3. 旧 session に `input_audio_buffer.commit` を送り、completed event を最大 10 秒待つ
+4. flush 中に届いた新しい audio block を一時退避する
+5. 旧 session の WebSocket を閉じる
+6. 新しい transcription session を作る
+7. timeline を初期化する
+8. 退避した audio block を新 session へ送る
+9. 状態を `recording` に戻す
 
-現状では、張り替え直前の未確定 audio buffer を明示 commit して completed event を待つ処理は
-入っていない。停止時も cancellation を受けたら WebSocket を閉じ、audio capture を止める。
-そのため、停止直前または張り替え直前の未確定発話は保存されない可能性がある。
+flush が timeout または Realtime API error になった場合は録音をエラー停止しない。
+未保存の発話がある可能性を warning として UI に残し、停止処理または session 張り替えを続ける。
+空または短すぎる buffer の commit rejection は、保存対象がないものとして warning にしない。
 
 ## transcript 出力
 
@@ -196,7 +205,7 @@ JSONL の例:
 Markdown は text が空でない segment だけ追記する。JSONL は空 text の segment も構造化ログ
 として追記する。
 
-local start/end timestamp は Realtime API の audio offset を session 開始時刻に足して作る。
+local start/end timestamp は Realtime API の audio offset を audio capture 時刻に足して作る。
 該当 event から offset を取得できない場合は現在時刻で補う。
 
 ## UI
@@ -233,6 +242,7 @@ React の画面の責務は次に限定する。
 - 今日の Markdown / JSONL path と出力 directory の表示
 - 今日の Markdown と出力 directory を開く
 - 最後のエラーの表示
+- 最後の警告の表示
 
 録音中の状態遷移は Rust 側を正とし、React 側は Tauri event と command response で表示を
 更新する。
@@ -247,13 +257,13 @@ UI または tray で確認できる状態は次の 4 つとする。
 - `stopped_with_error`: 認証、接続、音声入力、ファイル書き込みなどで停止した
 
 `stopped_with_error` からの自動復旧はしない。原因を表示し、ユーザーが再度 Start する。
+flush timeout や flush 中の Realtime API error は `stopped_with_error` にせず、`last_warning`
+として表示する。
 
 ## 現状の未解消点
 
 現状コードと目標仕様の主な差分は次の通り。
 
-- 停止時に未確定 buffer を明示 commit して completed event を待つ処理がない
-- session 張り替え時に未確定 buffer を明示 commit して completed event を待つ処理がない
 - 固定長 chunk builder はなく、server VAD による commit に依存している
 - 入力デバイス id は cpal の列挙順と名前から作る hash で、OS の永続 id ではない
 - tray menu は Start / Stop / Show / Quit のみで、入力デバイスや出力先操作は React window 側にある
@@ -269,17 +279,16 @@ UI または tray で確認できる状態は次の 4 つとする。
 - React window から Start / Stop、出力ファイル確認、入力デバイス選択ができる
 - 5 分程度の手元発話が Markdown と JSONL に保存される
 - 無音を含む状態でもアプリが落ちずに動き続ける
+- 停止操作時に最後の未確定発話が保存される
+- session 張り替え境界でも旧 session の最後と新 session の最初が保存される
+- flush が 10 秒以内に完了しない場合、エラー停止せず警告が表示される
 - 60 分を超える運用で session 張り替え後も出力が続く
 - ファイル書き込みに失敗した場合、エラー状態で停止する
-
-停止操作時に最後の未確定発話が保存されること、session 張り替え境界で欠落しないことは、
-現状の検証完了条件には含めない。これらは明示 commit / flush を実装した後に検証項目へ戻す。
 
 ## 後で考えること
 
 MVP が動いた後に、必要に応じて次を追加する。
 
-- 停止時と session 張り替え時の commit / flush
 - token 期限切れ時の再接続、再ログイン、ユーザー通知
 - ローカル VAD、overlap、重複除去による transcript 品質改善
 - transcript の DB 化、検索、編集 UI
