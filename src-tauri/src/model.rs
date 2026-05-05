@@ -54,6 +54,7 @@ pub(crate) struct AppSnapshot {
     pub(crate) today_markdown_path: String,
     pub(crate) today_jsonl_path: String,
     pub(crate) last_error: Option<String>,
+    pub(crate) last_warning: Option<String>,
 }
 
 #[derive(Debug)]
@@ -67,6 +68,7 @@ pub(crate) struct AppModel {
     pub(crate) status: TranscriptionStatus,
     pub(crate) settings: Settings,
     pub(crate) last_error: Option<String>,
+    pub(crate) last_warning: Option<String>,
     pub(crate) runtime: Option<RuntimeHandle>,
 }
 

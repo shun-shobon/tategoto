@@ -22,6 +22,7 @@ export type AppSnapshot = {
   today_markdown_path: string;
   today_jsonl_path: string;
   last_error: string | null;
+  last_warning: string | null;
 };
 
 export const emptySnapshot: AppSnapshot = {
@@ -36,4 +37,5 @@ export const emptySnapshot: AppSnapshot = {
   today_markdown_path: "",
   today_jsonl_path: "",
   last_error: null,
+  last_warning: null,
 };

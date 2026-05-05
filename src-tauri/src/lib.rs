@@ -32,6 +32,7 @@ pub fn run() {
                     status: TranscriptionStatus::Idle,
                     settings,
                     last_error: None,
+                    last_warning: None,
                     runtime: None,
                 }),
                 paths,

@@ -18,6 +18,7 @@ pub(crate) async fn snapshot(state: &SharedAppState) -> anyhow::Result<AppSnapsh
         today_markdown_path: paths.markdown.to_string_lossy().to_string(),
         today_jsonl_path: paths.jsonl.to_string_lossy().to_string(),
         last_error: model.last_error.clone(),
+        last_warning: model.last_warning.clone(),
     })
 }
 
@@ -45,6 +46,14 @@ pub(crate) async fn set_error(app: &AppHandle, state: &SharedAppState, error: St
     }
     update_tray_status(app, state).await;
     emit_snapshot(app, state, "transcription_error").await;
+}
+
+pub(crate) async fn set_warning(app: &AppHandle, state: &SharedAppState, warning: String) {
+    {
+        let mut model = state.model.lock().await;
+        model.last_warning = Some(warning);
+    }
+    emit_snapshot(app, state, "transcription_state_changed").await;
 }
 
 pub(crate) async fn emit_snapshot(app: &AppHandle, state: &SharedAppState, event: &str) {

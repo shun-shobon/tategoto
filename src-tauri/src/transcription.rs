@@ -11,12 +11,15 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     ROTATE_AFTER,
-    app_events::{emit_snapshot, set_error, update_status},
-    audio::{AudioBlock, start_audio_capture},
+    app_events::{emit_snapshot, set_error, set_warning, update_status},
+    audio::{AudioBlock, AudioCapture, start_audio_capture},
     model::{RuntimeHandle, Settings, SharedAppState, TranscriptionStatus},
-    realtime::{RealtimeConnection, RealtimeTimeline, read_chatgpt_token},
+    realtime::{RealtimeConnection, RealtimeEvent, RealtimeTimeline, read_chatgpt_token},
     transcript::append_transcript_segment,
 };
+
+const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
+const PREFLUSH_EVENT_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
 
 pub(crate) async fn start_recording(app: AppHandle, state: SharedAppState) -> anyhow::Result<()> {
     let settings = {
@@ -27,6 +30,7 @@ pub(crate) async fn start_recording(app: AppHandle, state: SharedAppState) -> an
 
         model.status = TranscriptionStatus::Recording;
         model.last_error = None;
+        model.last_warning = None;
         model.settings.clone()
     };
 
@@ -80,7 +84,7 @@ async fn run_transcription(
 ) -> anyhow::Result<()> {
     let token = read_chatgpt_token()?;
     let (audio_tx, mut audio_rx) = mpsc::channel::<AudioBlock>(64);
-    let audio_capture = start_audio_capture(settings, audio_tx)?;
+    let mut audio_capture = Some(start_audio_capture(settings, audio_tx)?);
     let http = Client::new();
     let mut ws = RealtimeConnection::connect(&http, &token).await?;
     let mut timeline = RealtimeTimeline::new();
@@ -89,25 +93,51 @@ async fn run_transcription(
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
+                stop_audio_capture(&mut audio_capture);
+                drain_audio_queue(&mut audio_rx, &mut ws, &mut timeline).await?;
+                if let Some(warning) = flush_current_session(
+                    &app,
+                    &state,
+                    &mut ws,
+                    &mut timeline,
+                    &mut audio_rx,
+                    None,
+                ).await? {
+                    set_warning(&app, &state, warning).await;
+                }
                 ws.close().await;
-                audio_capture.stop();
                 return Ok(());
             }
             maybe_block = audio_rx.recv() => {
                 let block = maybe_block.context("audio stream closed")?;
-                ws.append_audio(block.pcm).await?;
+                append_audio_block(&mut ws, &mut timeline, block).await?;
             }
-            maybe_segment = ws.next_transcript_segment(&mut timeline) => {
-                if let Some(segment) = maybe_segment? {
-                    append_transcript_segment(&state.paths.output_directory, &segment)?;
-                    emit_snapshot(&app, &state, "transcript_segment_written").await;
-                }
+            maybe_event = ws.next_event(&mut timeline) => {
+                handle_realtime_event(&app, &state, maybe_event?).await?;
             }
             _ = tokio::time::sleep_until(next_rotation_deadline(session_started_at)) => {
                 update_status(&app, &state, TranscriptionStatus::RotatingSession, None).await;
+                drain_audio_queue(&mut audio_rx, &mut ws, &mut timeline).await?;
+                let mut deferred_audio = Vec::new();
+                if let Some(warning) = flush_current_session(
+                    &app,
+                    &state,
+                    &mut ws,
+                    &mut timeline,
+                    &mut audio_rx,
+                    Some(&mut deferred_audio),
+                ).await? {
+                    set_warning(&app, &state, warning).await;
+                }
+                while let Ok(block) = audio_rx.try_recv() {
+                    deferred_audio.push(block);
+                }
                 ws.close().await;
                 ws = RealtimeConnection::connect(&http, &token).await?;
                 timeline = RealtimeTimeline::new();
+                for block in deferred_audio {
+                    append_audio_block(&mut ws, &mut timeline, block).await?;
+                }
                 session_started_at = Instant::now();
                 update_status(&app, &state, TranscriptionStatus::Recording, None).await;
             }
@@ -117,6 +147,144 @@ async fn run_transcription(
 
 fn next_rotation_deadline(session_started_at: Instant) -> Instant {
     session_started_at + ROTATE_AFTER
+}
+
+fn stop_audio_capture(audio_capture: &mut Option<AudioCapture>) {
+    if let Some(capture) = audio_capture.take() {
+        capture.stop();
+    }
+}
+
+async fn append_audio_block(
+    ws: &mut RealtimeConnection,
+    timeline: &mut RealtimeTimeline,
+    block: AudioBlock,
+) -> anyhow::Result<()> {
+    if block.pcm.is_empty() {
+        return Ok(());
+    }
+
+    timeline.record_audio_block(&block);
+    ws.append_audio(block.pcm).await
+}
+
+async fn drain_audio_queue(
+    audio_rx: &mut mpsc::Receiver<AudioBlock>,
+    ws: &mut RealtimeConnection,
+    timeline: &mut RealtimeTimeline,
+) -> anyhow::Result<()> {
+    while let Ok(block) = audio_rx.try_recv() {
+        append_audio_block(ws, timeline, block).await?;
+    }
+    Ok(())
+}
+
+async fn flush_current_session(
+    app: &AppHandle,
+    state: &SharedAppState,
+    ws: &mut RealtimeConnection,
+    timeline: &mut RealtimeTimeline,
+    audio_rx: &mut mpsc::Receiver<AudioBlock>,
+    mut deferred_audio: Option<&mut Vec<AudioBlock>>,
+) -> anyhow::Result<Option<String>> {
+    drain_realtime_events(app, state, ws, timeline, PREFLUSH_EVENT_DRAIN_TIMEOUT).await?;
+
+    let should_commit = timeline.has_committable_audio();
+    if !should_commit && !timeline.has_pending_turns() {
+        return Ok(None);
+    }
+
+    if should_commit && let Err(error) = ws.commit_audio().await {
+        return Ok(Some(format!(
+            "最後の音声を確定できませんでした。未保存の発話がある可能性があります: {error:#}"
+        )));
+    }
+
+    let deadline = tokio::time::sleep(FLUSH_TIMEOUT);
+    tokio::pin!(deadline);
+    let mut saw_commit = !should_commit;
+    let collect_deferred_audio = deferred_audio.is_some();
+
+    loop {
+        if saw_commit && !timeline.has_pending_turns() {
+            return Ok(None);
+        }
+
+        tokio::select! {
+            event = ws.next_event(timeline) => {
+                match event? {
+                    RealtimeEvent::Committed => {
+                        saw_commit = true;
+                    }
+                    RealtimeEvent::TranscriptSegment(segment) => {
+                        append_transcript_segment(&state.paths.output_directory, &segment)?;
+                        emit_snapshot(app, state, "transcript_segment_written").await;
+                    }
+                    RealtimeEvent::CommitRejected(_) => {
+                        if !timeline.has_pending_turns() {
+                            return Ok(None);
+                        }
+                        saw_commit = true;
+                    }
+                    RealtimeEvent::ApiError(message) => {
+                        return Ok(Some(format!(
+                            "最後の音声の保存確認中にRealtime APIエラーが発生しました。未保存の発話がある可能性があります: {message}"
+                        )));
+                    }
+                    RealtimeEvent::Ignored => {}
+                }
+            }
+            maybe_block = audio_rx.recv(), if collect_deferred_audio => {
+                if let Some(block) = maybe_block
+                    && let Some(buffer) = deferred_audio.as_deref_mut()
+                {
+                    buffer.push(block);
+                }
+            }
+            _ = &mut deadline => {
+                return Ok(Some(format!(
+                    "最後の音声の保存確認が{}秒以内に完了しませんでした。未保存の発話がある可能性があります。",
+                    FLUSH_TIMEOUT.as_secs()
+                )));
+            }
+        }
+    }
+}
+
+async fn handle_realtime_event(
+    app: &AppHandle,
+    state: &SharedAppState,
+    event: RealtimeEvent,
+) -> anyhow::Result<()> {
+    match event {
+        RealtimeEvent::TranscriptSegment(segment) => {
+            append_transcript_segment(&state.paths.output_directory, &segment)?;
+            emit_snapshot(app, state, "transcript_segment_written").await;
+        }
+        RealtimeEvent::ApiError(message) => {
+            anyhow::bail!("Realtime API error: {message}");
+        }
+        RealtimeEvent::CommitRejected(message) => {
+            anyhow::bail!("Realtime API rejected audio commit: {message}");
+        }
+        RealtimeEvent::Committed | RealtimeEvent::Ignored => {}
+    }
+    Ok(())
+}
+
+async fn drain_realtime_events(
+    app: &AppHandle,
+    state: &SharedAppState,
+    ws: &mut RealtimeConnection,
+    timeline: &mut RealtimeTimeline,
+    idle_timeout: Duration,
+) -> anyhow::Result<()> {
+    loop {
+        match timeout(idle_timeout, ws.next_event(timeline)).await {
+            Ok(event) => handle_realtime_event(app, state, event?).await?,
+            Err(_) => return Ok(()),
+        }
+    }
 }
 
 #[cfg(test)]
