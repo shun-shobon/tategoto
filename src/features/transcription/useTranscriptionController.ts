@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { invokeSnapshot, listenToSnapshotEvents, updateSettings } from "./api";
-import type { InputDeviceMode } from "./types";
-import { emptySnapshot } from "./types";
+import type { InputDeviceMode, Settings, TranscriptionSettings } from "./types";
+import { defaultTranscriptionSettings, emptySnapshot } from "./types";
 
 export function useTranscriptionController() {
   const [snapshot, setSnapshot] = useState(emptySnapshot);
@@ -43,29 +43,54 @@ export function useTranscriptionController() {
     }
   }, []);
 
-  const runSettingsCommand = useCallback(
+  const runSettingsCommand = useCallback(async (settings: Settings) => {
+    setPending(true);
+    try {
+      const nextSnapshot = await updateSettings(settings);
+      setSnapshot(nextSnapshot);
+    } finally {
+      setPending(false);
+    }
+  }, []);
+
+  const runDeviceSettingsCommand = useCallback(
     async (mode: InputDeviceMode, deviceId: string | null) => {
       const device = deviceId ? snapshot.devices.find((item) => item.id === deviceId) : undefined;
-      setPending(true);
-      try {
-        const nextSnapshot = await updateSettings({
-          input_device_mode: mode,
-          input_device_id: mode === "fixed_device" ? (device?.id ?? deviceId) : null,
-          input_device_name: mode === "fixed_device" ? (device?.name ?? null) : null,
-        });
-        setSnapshot(nextSnapshot);
-      } finally {
-        setPending(false);
-      }
+      await runSettingsCommand({
+        ...snapshot.settings,
+        input_device_mode: mode,
+        input_device_id: mode === "fixed_device" ? (device?.id ?? deviceId) : null,
+        input_device_name: mode === "fixed_device" ? (device?.name ?? null) : null,
+      });
     },
-    [snapshot.devices],
+    [runSettingsCommand, snapshot.devices, snapshot.settings],
   );
+
+  const updateTranscriptionSettings = useCallback(
+    (transcription: TranscriptionSettings) => {
+      void runSettingsCommand({
+        ...snapshot.settings,
+        transcription,
+      });
+    },
+    [runSettingsCommand, snapshot.settings],
+  );
+
+  const resetTranscriptionSettings = useCallback(() => {
+    void runSettingsCommand({
+      ...snapshot.settings,
+      transcription: {
+        ...defaultTranscriptionSettings,
+        turn_detection: { ...defaultTranscriptionSettings.turn_detection },
+      },
+    });
+  }, [runSettingsCommand, snapshot.settings]);
 
   const selectMode = useCallback(
     (mode: InputDeviceMode) => {
-      void runSettingsCommand(mode, selectedDeviceId || null);
+      void runDeviceSettingsCommand(mode, selectedDeviceId || null);
     },
-    [runSettingsCommand, selectedDeviceId],
+    [runDeviceSettingsCommand, selectedDeviceId],
   );
 
   const selectDevice = useCallback(
@@ -73,15 +98,17 @@ export function useTranscriptionController() {
       if (!snapshot.devices.some((item) => item.id === deviceId)) {
         return;
       }
-      void runSettingsCommand("fixed_device", deviceId);
+      void runDeviceSettingsCommand("fixed_device", deviceId);
     },
-    [runSettingsCommand, snapshot.devices],
+    [runDeviceSettingsCommand, snapshot.devices],
   );
 
   const canStart =
     !pending && (snapshot.status === "idle" || snapshot.status === "stopped_with_error");
   const canStop =
     !pending && (snapshot.status === "recording" || snapshot.status === "rotating_session");
+  const settingsDisabled =
+    pending || snapshot.status === "recording" || snapshot.status === "rotating_session";
 
   return {
     snapshot,
@@ -90,6 +117,7 @@ export function useTranscriptionController() {
     selectedDeviceName,
     canStart,
     canStop,
+    settingsDisabled,
     start: () => void runCommand("start_transcription"),
     stop: () => void runCommand("stop_transcription"),
     refreshDevices: () => void runCommand("refresh_input_devices"),
@@ -97,5 +125,7 @@ export function useTranscriptionController() {
     openOutputDirectory: () => void runCommand("open_output_directory"),
     selectMode,
     selectDevice,
+    updateTranscriptionSettings,
+    resetTranscriptionSettings,
   };
 }
