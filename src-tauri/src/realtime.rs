@@ -173,7 +173,12 @@ impl RealtimeConnection {
             _ => return Ok(RealtimeEvent::Ignored),
         };
         let value: serde_json::Value = serde_json::from_str(&text)?;
-        handle_server_event(value, &self.session.id, &self.transcription_model, timeline)
+        handle_server_event(
+            &value,
+            &self.session.id,
+            &self.transcription_model,
+            timeline,
+        )
     }
 }
 
@@ -276,28 +281,28 @@ fn audio_offset_to_local_time(
 }
 
 fn handle_server_event(
-    value: serde_json::Value,
+    value: &serde_json::Value,
     session_id: &str,
     transcription_model: &str,
     timeline: &mut RealtimeTimeline,
 ) -> anyhow::Result<RealtimeEvent> {
     match value.get("type").and_then(serde_json::Value::as_str) {
         Some("input_audio_buffer.speech_started") => {
-            let item_id = event_item_id(&value)?;
+            let item_id = event_item_id(value)?;
             timeline.turns.entry(item_id).or_default().start_ms = value
                 .get("audio_start_ms")
                 .and_then(serde_json::Value::as_i64);
             Ok(RealtimeEvent::Ignored)
         }
         Some("input_audio_buffer.speech_stopped") => {
-            let item_id = event_item_id(&value)?;
+            let item_id = event_item_id(value)?;
             timeline.turns.entry(item_id).or_default().end_ms = value
                 .get("audio_end_ms")
                 .and_then(serde_json::Value::as_i64);
             Ok(RealtimeEvent::Ignored)
         }
         Some("input_audio_buffer.committed") => {
-            let item_id = event_item_id(&value)?;
+            let item_id = event_item_id(value)?;
             timeline.reset_pending_audio();
             timeline.turns.entry(item_id).or_default().previous_item_id = value
                 .get("previous_item_id")
@@ -306,7 +311,7 @@ fn handle_server_event(
             Ok(RealtimeEvent::Committed)
         }
         Some("conversation.item.input_audio_transcription.completed") => {
-            let item_id = event_item_id(&value)?;
+            let item_id = event_item_id(value)?;
             let timing = timeline.turns.remove(&item_id).unwrap_or_default();
             let text = value
                 .get("transcript")
@@ -329,7 +334,7 @@ fn handle_server_event(
             }))
         }
         Some("error") => {
-            let message = realtime_error_message(&value);
+            let message = realtime_error_message(value);
             if is_commit_rejected_error(&message) {
                 Ok(RealtimeEvent::CommitRejected(message))
             } else {
@@ -345,8 +350,7 @@ fn realtime_error_message(value: &serde_json::Value) -> String {
         .get("error")
         .and_then(|error| error.get("message"))
         .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| value.to_string())
+        .map_or_else(|| value.to_string(), str::to_string)
 }
 
 fn is_commit_rejected_error(message: &str) -> bool {
@@ -377,7 +381,7 @@ mod tests {
 
         assert!(matches!(
             handle_server_event(
-                json!({
+                &json!({
                     "type": "input_audio_buffer.speech_started",
                     "item_id": "item_test",
                     "audio_start_ms": 1_000
@@ -391,7 +395,7 @@ mod tests {
         ));
         assert!(matches!(
             handle_server_event(
-                json!({
+                &json!({
                     "type": "input_audio_buffer.speech_stopped",
                     "item_id": "item_test",
                     "audio_end_ms": 2_500
@@ -405,7 +409,7 @@ mod tests {
         ));
         assert!(matches!(
             handle_server_event(
-                json!({
+                &json!({
                     "type": "input_audio_buffer.committed",
                     "item_id": "item_test",
                     "previous_item_id": "item_previous"
@@ -420,7 +424,7 @@ mod tests {
         assert_eq!(timeline.pending_audio_duration, Duration::ZERO);
 
         let RealtimeEvent::TranscriptSegment(segment) = handle_server_event(
-            json!({
+            &json!({
                 "type": "conversation.item.input_audio_transcription.completed",
                 "item_id": "item_test",
                 "transcript": "  こんにちは  "
@@ -470,7 +474,7 @@ mod tests {
         let mut timeline = RealtimeTimeline::new();
 
         let event = handle_server_event(
-            json!({
+            &json!({
                 "type": "error",
                 "error": {
                     "message": "Input audio buffer is too small. Expected at least 100ms of audio."

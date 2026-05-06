@@ -61,7 +61,7 @@ pub(crate) fn start_audio_capture(
     let join = thread::spawn(move || {
         let result = (|| -> anyhow::Result<cpal::Stream> {
             let device = resolve_input_device(&settings)?;
-            build_audio_stream(device, sender)
+            build_audio_stream(&device, sender)
         })();
 
         match result {
@@ -147,7 +147,7 @@ fn stable_device_id(index: usize, device: &cpal::Device) -> String {
 }
 
 fn build_audio_stream(
-    device: cpal::Device,
+    device: &cpal::Device,
     sender: mpsc::Sender<AudioBlock>,
 ) -> anyhow::Result<cpal::Stream> {
     let config = device.default_input_config()?;
@@ -168,7 +168,7 @@ fn build_audio_stream(
             move |data: &[i16], _| {
                 let samples = data
                     .iter()
-                    .map(|sample| *sample as f32 / i16::MAX as f32)
+                    .map(|sample| f32::from(*sample) / f32::from(i16::MAX))
                     .collect::<Vec<_>>();
                 send_audio_block(&samples, sample_rate, channels, &sender);
             },
@@ -180,7 +180,7 @@ fn build_audio_stream(
             move |data: &[u16], _| {
                 let samples = data
                     .iter()
-                    .map(|sample| (*sample as f32 / u16::MAX as f32) * 2.0 - 1.0)
+                    .map(|sample| (f32::from(*sample) / f32::from(u16::MAX)) * 2.0 - 1.0)
                     .collect::<Vec<_>>();
                 send_audio_block(&samples, sample_rate, channels, &sender);
             },
@@ -209,33 +209,51 @@ fn send_audio_block(
 
 fn pcm16_duration(pcm: &[u8]) -> Duration {
     let frames = pcm.len() / 2;
-    Duration::from_secs_f64(frames as f64 / TARGET_SAMPLE_RATE as f64)
+    let frames = u128::try_from(frames).unwrap_or(u128::MAX);
+    let nanos = frames * 1_000_000_000_u128 / u128::from(TARGET_SAMPLE_RATE);
+    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
 }
 
 fn resample_to_pcm16_mono(samples: &[f32], source_rate: u32, source_channels: u16) -> Vec<u8> {
-    let channels = usize::from(source_channels.max(TARGET_CHANNELS));
-    let frames = samples.len() / channels;
+    if source_rate == 0 {
+        return Vec::new();
+    }
+
+    let channels = source_channels.max(TARGET_CHANNELS);
+    let channel_count = usize::from(channels);
+    let frames = samples.len() / channel_count;
     if frames == 0 {
         return Vec::new();
     }
 
     let mut mono = Vec::with_capacity(frames);
     for frame in 0..frames {
-        let start = frame * channels;
-        let sum = samples[start..start + channels].iter().sum::<f32>();
-        mono.push(sum / channels as f32);
+        let start = frame * channel_count;
+        let sum = samples[start..start + channel_count].iter().sum::<f32>();
+        mono.push(sum / f32::from(channels));
     }
 
-    let target_frames =
-        ((frames as u64 * TARGET_SAMPLE_RATE as u64) / source_rate as u64).max(1) as usize;
+    let target_sample_rate =
+        usize::try_from(TARGET_SAMPLE_RATE).expect("target sample rate fits usize");
+    let source_rate = usize::try_from(source_rate).expect("source sample rate fits usize");
+    let target_frames = frames
+        .saturating_mul(target_sample_rate)
+        .checked_div(source_rate)
+        .unwrap_or_default()
+        .max(1);
     let mut pcm = Vec::with_capacity(target_frames * 2);
     for index in 0..target_frames {
-        let source_index = (index as u64 * source_rate as u64 / TARGET_SAMPLE_RATE as u64) as usize;
+        let source_index = index.saturating_mul(source_rate) / target_sample_rate;
         let sample = mono[source_index.min(mono.len() - 1)].clamp(-1.0, 1.0);
-        let int_sample = (sample * i16::MAX as f32) as i16;
+        let int_sample = f32_to_pcm16(sample);
         pcm.extend_from_slice(&int_sample.to_le_bytes());
     }
     pcm
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn f32_to_pcm16(sample: f32) -> i16 {
+    (sample * f32::from(i16::MAX)) as i16
 }
 
 #[cfg(test)]
@@ -265,9 +283,8 @@ mod tests {
             ..Settings::default()
         };
 
-        let error = match resolve_input_device(&settings) {
-            Ok(_) => panic!("fixed missing device should fail"),
-            Err(error) => error,
+        let Err(error) = resolve_input_device(&settings) else {
+            panic!("fixed missing device should fail");
         };
         assert!(
             error

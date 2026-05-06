@@ -92,7 +92,7 @@ async fn run_transcription(
 
     loop {
         tokio::select! {
-            _ = cancel.cancelled() => {
+            () = cancel.cancelled() => {
                 stop_audio_capture(&mut audio_capture);
                 drain_audio_queue(&mut audio_rx, &mut ws, &mut timeline).await?;
                 if let Some(warning) = flush_current_session(
@@ -115,7 +115,7 @@ async fn run_transcription(
             maybe_event = ws.next_event(&mut timeline) => {
                 handle_realtime_event(&app, &state, maybe_event?).await?;
             }
-            _ = tokio::time::sleep_until(next_rotation_deadline(session_started_at)) => {
+            () = tokio::time::sleep_until(next_rotation_deadline(session_started_at)) => {
                 update_status(&app, &state, TranscriptionStatus::RotatingSession, None).await;
                 drain_audio_queue(&mut audio_rx, &mut ws, &mut timeline).await?;
                 let mut deferred_audio = Vec::new();
@@ -241,7 +241,7 @@ async fn flush_current_session(
                     buffer.push(block);
                 }
             }
-            _ = &mut deadline => {
+            () = &mut deadline => {
                 return Ok(Some(format!(
                     "最後の音声の保存確認が{}秒以内に完了しませんでした。未保存の発話がある可能性があります。",
                     FLUSH_TIMEOUT.as_secs()

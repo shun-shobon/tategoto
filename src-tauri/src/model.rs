@@ -14,22 +14,18 @@ pub(crate) enum TranscriptionStatus {
     StoppedWithError,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum InputDeviceMode {
+    #[default]
     SystemDefault,
     FixedDevice,
 }
 
-impl Default for InputDeviceMode {
-    fn default() -> Self {
-        Self::SystemDefault
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) enum TranscriptionModel {
     #[serde(rename = "gpt-4o-transcribe")]
+    #[default]
     Gpt4oTranscribe,
     #[serde(rename = "gpt-4o-mini-transcribe")]
     Gpt4oMiniTranscribe,
@@ -41,12 +37,6 @@ impl TranscriptionModel {
             Self::Gpt4oTranscribe => "gpt-4o-transcribe",
             Self::Gpt4oMiniTranscribe => "gpt-4o-mini-transcribe",
         }
-    }
-}
-
-impl Default for TranscriptionModel {
-    fn default() -> Self {
-        Self::Gpt4oTranscribe
     }
 }
 
@@ -98,7 +88,7 @@ impl Default for TurnDetectionSettings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub(crate) struct TranscriptionSettings {
     #[serde(default)]
     pub(crate) model: TranscriptionModel,
@@ -110,18 +100,6 @@ pub(crate) struct TranscriptionSettings {
     pub(crate) noise_reduction: Option<NoiseReductionType>,
     #[serde(default)]
     pub(crate) turn_detection: TurnDetectionSettings,
-}
-
-impl Default for TranscriptionSettings {
-    fn default() -> Self {
-        Self {
-            model: TranscriptionModel::default(),
-            language: None,
-            prompt: None,
-            noise_reduction: None,
-            turn_detection: TurnDetectionSettings::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
