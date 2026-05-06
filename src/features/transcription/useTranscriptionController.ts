@@ -79,10 +79,7 @@ export function useTranscriptionController() {
   const resetTranscriptionSettings = useCallback(() => {
     void runSettingsCommand({
       ...snapshot.settings,
-      transcription: {
-        ...defaultTranscriptionSettings,
-        turn_detection: { ...defaultTranscriptionSettings.turn_detection },
-      },
+      transcription: defaultTranscriptionSettings,
     });
   }, [runSettingsCommand, snapshot.settings]);
 
@@ -105,10 +102,8 @@ export function useTranscriptionController() {
 
   const canStart =
     !pending && (snapshot.status === "idle" || snapshot.status === "stopped_with_error");
-  const canStop =
-    !pending && (snapshot.status === "recording" || snapshot.status === "rotating_session");
-  const settingsDisabled =
-    pending || snapshot.status === "recording" || snapshot.status === "rotating_session";
+  const canStop = !pending && snapshot.status === "recording";
+  const settingsDisabled = pending || snapshot.status === "recording";
 
   return {
     snapshot,

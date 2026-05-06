@@ -6,7 +6,6 @@ import { OutputSection } from "./features/transcription/components/OutputSection
 import { RecordingControls } from "./features/transcription/components/RecordingControls";
 import { StatusPill } from "./features/transcription/components/StatusPill";
 import { TranscriptionSettingsSection } from "./features/transcription/components/TranscriptionSettingsSection";
-import { WarningBanner } from "./features/transcription/components/WarningBanner";
 import { useTranscriptionController } from "./features/transcription/useTranscriptionController";
 
 export function App() {
@@ -58,7 +57,6 @@ export function App() {
       />
 
       {snapshot.last_error ? <ErrorBanner message={snapshot.last_error} /> : null}
-      {snapshot.last_warning ? <WarningBanner message={snapshot.last_warning} /> : null}
 
       <footer className="mt-auto flex items-center justify-center gap-2 text-xs leading-normal text-slate-500">
         <Power size={14} />

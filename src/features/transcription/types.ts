@@ -1,10 +1,6 @@
-export type TranscriptionStatus = "idle" | "recording" | "rotating_session" | "stopped_with_error";
+export type TranscriptionStatus = "idle" | "recording" | "stopped_with_error";
 
 export type InputDeviceMode = "system_default" | "fixed_device";
-
-export type TranscriptionModel = "gpt-4o-transcribe" | "gpt-4o-mini-transcribe";
-
-export type NoiseReductionType = "near_field" | "far_field";
 
 export type InputDevice = {
   id: string;
@@ -12,18 +8,8 @@ export type InputDevice = {
   is_default: boolean;
 };
 
-export type TurnDetectionSettings = {
-  threshold: number;
-  prefix_padding_ms: number;
-  silence_duration_ms: number;
-};
-
 export type TranscriptionSettings = {
-  model: TranscriptionModel;
-  language: string | null;
-  prompt: string | null;
-  noise_reduction: NoiseReductionType | null;
-  turn_detection: TurnDetectionSettings;
+  locale_identifier: string | null;
 };
 
 export type Settings = {
@@ -41,19 +27,10 @@ export type AppSnapshot = {
   today_markdown_path: string;
   today_jsonl_path: string;
   last_error: string | null;
-  last_warning: string | null;
 };
 
 export const defaultTranscriptionSettings: TranscriptionSettings = {
-  model: "gpt-4o-transcribe",
-  language: null,
-  prompt: null,
-  noise_reduction: null,
-  turn_detection: {
-    threshold: 0.5,
-    prefix_padding_ms: 300,
-    silence_duration_ms: 700,
-  },
+  locale_identifier: null,
 };
 
 export const emptySnapshot: AppSnapshot = {
@@ -69,5 +46,4 @@ export const emptySnapshot: AppSnapshot = {
   today_markdown_path: "",
   today_jsonl_path: "",
   last_error: null,
-  last_warning: null,
 };

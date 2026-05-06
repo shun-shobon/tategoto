@@ -5,14 +5,12 @@ import type { TranscriptionStatus } from "../types";
 const statusLabel: Record<TranscriptionStatus, string> = {
   idle: "待機中",
   recording: "録音中",
-  rotating_session: "セッション更新中",
   stopped_with_error: "エラー停止",
 };
 
 const statusToneClass: Record<TranscriptionStatus, string> = {
   idle: "bg-slate-200 text-slate-600",
   recording: "bg-teal-100 text-teal-700",
-  rotating_session: "bg-orange-100 text-orange-800",
   stopped_with_error: "bg-red-100 text-red-700",
 };
 
