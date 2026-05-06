@@ -10,7 +10,6 @@ use tokio_util::sync::CancellationToken;
 pub(crate) enum TranscriptionStatus {
     Idle,
     Recording,
-    RotatingSession,
     StoppedWithError,
 }
 
@@ -22,84 +21,10 @@ pub(crate) enum InputDeviceMode {
     FixedDevice,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) enum TranscriptionModel {
-    #[serde(rename = "gpt-4o-transcribe")]
-    #[default]
-    Gpt4oTranscribe,
-    #[serde(rename = "gpt-4o-mini-transcribe")]
-    Gpt4oMiniTranscribe,
-}
-
-impl TranscriptionModel {
-    pub(crate) fn as_str(&self) -> &'static str {
-        match self {
-            Self::Gpt4oTranscribe => "gpt-4o-transcribe",
-            Self::Gpt4oMiniTranscribe => "gpt-4o-mini-transcribe",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum NoiseReductionType {
-    NearField,
-    FarField,
-}
-
-impl NoiseReductionType {
-    pub(crate) fn as_str(&self) -> &'static str {
-        match self {
-            Self::NearField => "near_field",
-            Self::FarField => "far_field",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) struct TurnDetectionSettings {
-    #[serde(default = "default_vad_threshold")]
-    pub(crate) threshold: f64,
-    #[serde(default = "default_prefix_padding_ms")]
-    pub(crate) prefix_padding_ms: u32,
-    #[serde(default = "default_silence_duration_ms")]
-    pub(crate) silence_duration_ms: u32,
-}
-
-const fn default_vad_threshold() -> f64 {
-    0.5
-}
-
-const fn default_prefix_padding_ms() -> u32 {
-    300
-}
-
-const fn default_silence_duration_ms() -> u32 {
-    700
-}
-
-impl Default for TurnDetectionSettings {
-    fn default() -> Self {
-        Self {
-            threshold: default_vad_threshold(),
-            prefix_padding_ms: default_prefix_padding_ms(),
-            silence_duration_ms: default_silence_duration_ms(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub(crate) struct TranscriptionSettings {
     #[serde(default)]
-    pub(crate) model: TranscriptionModel,
-    #[serde(default)]
-    pub(crate) language: Option<String>,
-    #[serde(default)]
-    pub(crate) prompt: Option<String>,
-    #[serde(default)]
-    pub(crate) noise_reduction: Option<NoiseReductionType>,
-    #[serde(default)]
-    pub(crate) turn_detection: TurnDetectionSettings,
+    pub(crate) locale_identifier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,7 +66,6 @@ pub(crate) struct AppSnapshot {
     pub(crate) today_markdown_path: String,
     pub(crate) today_jsonl_path: String,
     pub(crate) last_error: Option<String>,
-    pub(crate) last_warning: Option<String>,
 }
 
 #[derive(Debug)]
@@ -155,7 +79,6 @@ pub(crate) struct AppModel {
     pub(crate) status: TranscriptionStatus,
     pub(crate) settings: Settings,
     pub(crate) last_error: Option<String>,
-    pub(crate) last_warning: Option<String>,
     pub(crate) runtime: Option<RuntimeHandle>,
 }
 
@@ -193,3 +116,19 @@ impl Serialize for CommandError {
 }
 
 pub(crate) type SharedAppState = Arc<SharedState>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transcription_settings_use_locale_identifier_contract() {
+        let settings = TranscriptionSettings {
+            locale_identifier: Some("ja-JP".to_string()),
+        };
+
+        let json = serde_json::to_string(&settings).unwrap();
+
+        assert_eq!(json, r#"{"locale_identifier":"ja-JP"}"#);
+    }
+}

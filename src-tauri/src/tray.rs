@@ -74,7 +74,6 @@ fn tray_status_label(status: &TranscriptionStatus) -> (&'static str, &'static st
     match status {
         TranscriptionStatus::Idle => ("○", "待機中"),
         TranscriptionStatus::Recording => ("●", "録音中"),
-        TranscriptionStatus::RotatingSession => ("◐", "更新中"),
         TranscriptionStatus::StoppedWithError => ("!", "エラー"),
     }
 }

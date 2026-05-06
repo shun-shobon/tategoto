@@ -16,7 +16,6 @@ pub(crate) struct TranscriptSegment {
     pub(crate) session_id: String,
     pub(crate) item_id: String,
     pub(crate) previous_item_id: Option<String>,
-    pub(crate) model: String,
     pub(crate) text: String,
     pub(crate) received_at: DateTime<Local>,
 }
@@ -94,7 +93,6 @@ mod tests {
             session_id: "sess_test".to_string(),
             item_id: "item_test".to_string(),
             previous_item_id: None,
-            model: "gpt-4o-transcribe".to_string(),
             text: "今日の作業を始めます。".to_string(),
             received_at: DateTime::parse_from_rfc3339("2026-05-05T09:15:19+09:00")
                 .unwrap()
@@ -111,5 +109,6 @@ mod tests {
         assert!(markdown.contains("- [09:15:02-09:15:18] 今日の作業を始めます。"));
         assert!(jsonl.contains("\"session_id\":\"sess_test\""));
         assert!(jsonl.contains("\"previous_item_id\":null"));
+        assert!(!jsonl.contains("\"model\""));
     }
 }

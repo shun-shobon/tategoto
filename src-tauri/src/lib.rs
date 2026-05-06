@@ -2,16 +2,16 @@
 
 mod app_events;
 mod app_paths;
+mod apple_speech;
 mod audio;
 mod commands;
 mod model;
-mod realtime;
 mod settings;
 mod transcript;
 mod transcription;
 mod tray;
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use model::{AppModel, SharedState, TranscriptionStatus};
 use tauri::{ActivationPolicy, Manager, WindowEvent};
@@ -19,7 +19,6 @@ use tauri::{ActivationPolicy, Manager, WindowEvent};
 const TRAY_ID: &str = "main";
 const TARGET_SAMPLE_RATE: u32 = 24_000;
 const TARGET_CHANNELS: u16 = 1;
-const ROTATE_AFTER: Duration = Duration::from_secs(50 * 60);
 
 /// Starts the Tategoto Tauri application.
 ///
@@ -38,7 +37,6 @@ pub fn run() {
                     status: TranscriptionStatus::Idle,
                     settings,
                     last_error: None,
-                    last_warning: None,
                     runtime: None,
                 }),
                 paths,

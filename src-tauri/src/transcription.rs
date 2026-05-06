@@ -1,25 +1,20 @@
 use std::time::Duration;
 
 use anyhow::Context;
-use reqwest::Client;
+use chrono::{DateTime, Duration as ChronoDuration, Local};
 use tauri::AppHandle;
-use tokio::{
-    sync::mpsc,
-    time::{Instant, timeout},
-};
+use tokio::{sync::mpsc, time::timeout};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    ROTATE_AFTER,
-    app_events::{emit_snapshot, set_error, set_warning, update_status},
+    app_events::{emit_snapshot, set_error},
+    apple_speech::{AppleSpeechConnection, AppleSpeechEvent, AppleSpeechSegment},
     audio::{AudioBlock, AudioCapture, start_audio_capture},
     model::{RuntimeHandle, Settings, SharedAppState, TranscriptionStatus},
-    realtime::{RealtimeConnection, RealtimeEvent, RealtimeTimeline, read_chatgpt_token},
-    transcript::append_transcript_segment,
+    transcript::{TranscriptSegment, append_transcript_segment},
 };
 
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
-const PREFLUSH_EVENT_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
 
 pub(crate) async fn start_recording(app: AppHandle, state: SharedAppState) -> anyhow::Result<()> {
     let settings = {
@@ -30,7 +25,6 @@ pub(crate) async fn start_recording(app: AppHandle, state: SharedAppState) -> an
 
         model.status = TranscriptionStatus::Recording;
         model.last_error = None;
-        model.last_warning = None;
         model.settings.clone()
     };
 
@@ -82,71 +76,51 @@ async fn run_transcription(
     settings: Settings,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
-    let token = read_chatgpt_token()?;
+    let session_started_at = Local::now();
+    let (mut speech, mut speech_rx) = AppleSpeechConnection::start(&settings.transcription)?;
+    wait_until_speech_ready(&mut speech_rx).await?;
+
     let (audio_tx, mut audio_rx) = mpsc::channel::<AudioBlock>(64);
-    let mut audio_capture = Some(start_audio_capture(settings.clone(), audio_tx)?);
-    let http = Client::new();
-    let mut ws = RealtimeConnection::connect(&http, &token, &settings.transcription).await?;
-    let mut timeline = RealtimeTimeline::new();
-    let mut session_started_at = Instant::now();
+    let mut audio_capture = Some(start_audio_capture(settings, audio_tx)?);
 
     loop {
         tokio::select! {
             () = cancel.cancelled() => {
                 stop_audio_capture(&mut audio_capture);
-                drain_audio_queue(&mut audio_rx, &mut ws, &mut timeline).await?;
-                if let Some(warning) = flush_current_session(
-                    &app,
-                    &state,
-                    &mut ws,
-                    &mut timeline,
-                    &mut audio_rx,
-                    None,
-                ).await? {
-                    set_warning(&app, &state, warning).await;
-                }
-                ws.close().await;
+                drain_audio_queue(&mut audio_rx, &speech);
+                speech.stop();
+                drain_speech_events_until_stopped(&app, &state, &mut speech_rx, session_started_at).await?;
                 return Ok(());
             }
             maybe_block = audio_rx.recv() => {
                 let block = maybe_block.context("audio stream closed")?;
-                append_audio_block(&mut ws, &mut timeline, block).await?;
+                speech.append_audio(&block);
             }
-            maybe_event = ws.next_event(&mut timeline) => {
-                handle_realtime_event(&app, &state, maybe_event?).await?;
-            }
-            () = tokio::time::sleep_until(next_rotation_deadline(session_started_at)) => {
-                update_status(&app, &state, TranscriptionStatus::RotatingSession, None).await;
-                drain_audio_queue(&mut audio_rx, &mut ws, &mut timeline).await?;
-                let mut deferred_audio = Vec::new();
-                if let Some(warning) = flush_current_session(
-                    &app,
-                    &state,
-                    &mut ws,
-                    &mut timeline,
-                    &mut audio_rx,
-                    Some(&mut deferred_audio),
-                ).await? {
-                    set_warning(&app, &state, warning).await;
-                }
-                while let Ok(block) = audio_rx.try_recv() {
-                    deferred_audio.push(block);
-                }
-                ws.close().await;
-                ws = RealtimeConnection::connect(&http, &token, &settings.transcription).await?;
-                timeline = RealtimeTimeline::new();
-                for block in deferred_audio {
-                    append_audio_block(&mut ws, &mut timeline, block).await?;
-                }
-                session_started_at = Instant::now();
-                update_status(&app, &state, TranscriptionStatus::Recording, None).await;
+            maybe_event = speech_rx.recv() => {
+                let event = maybe_event.context("Apple SpeechTranscriber event stream closed")??;
+                handle_speech_event(&app, &state, event, session_started_at).await?;
             }
         }
     }
 }
 
-fn next_rotation_deadline(session_started_at: Instant) -> Instant {
-    session_started_at + ROTATE_AFTER
+async fn wait_until_speech_ready(
+    speech_rx: &mut mpsc::UnboundedReceiver<anyhow::Result<AppleSpeechEvent>>,
+) -> anyhow::Result<()> {
+    loop {
+        match speech_rx
+            .recv()
+            .await
+            .context("Apple SpeechTranscriber event stream closed before ready")??
+        {
+            AppleSpeechEvent::Ready => return Ok(()),
+            AppleSpeechEvent::Error { message } => anyhow::bail!(message),
+            AppleSpeechEvent::Stopped => {
+                anyhow::bail!("Apple SpeechTranscriber stopped before ready")
+            }
+            AppleSpeechEvent::Segment(_) => {}
+        }
+    }
 }
 
 fn stop_audio_capture(audio_capture: &mut Option<AudioCapture>) {
@@ -155,136 +129,84 @@ fn stop_audio_capture(audio_capture: &mut Option<AudioCapture>) {
     }
 }
 
-async fn append_audio_block(
-    ws: &mut RealtimeConnection,
-    timeline: &mut RealtimeTimeline,
-    block: AudioBlock,
-) -> anyhow::Result<()> {
-    if block.pcm.is_empty() {
-        return Ok(());
-    }
-
-    timeline.record_audio_block(&block);
-    ws.append_audio(block.pcm).await
-}
-
-async fn drain_audio_queue(
-    audio_rx: &mut mpsc::Receiver<AudioBlock>,
-    ws: &mut RealtimeConnection,
-    timeline: &mut RealtimeTimeline,
-) -> anyhow::Result<()> {
+fn drain_audio_queue(audio_rx: &mut mpsc::Receiver<AudioBlock>, speech: &AppleSpeechConnection) {
     while let Ok(block) = audio_rx.try_recv() {
-        append_audio_block(ws, timeline, block).await?;
+        speech.append_audio(&block);
     }
-    Ok(())
 }
 
-async fn flush_current_session(
+async fn drain_speech_events_until_stopped(
     app: &AppHandle,
     state: &SharedAppState,
-    ws: &mut RealtimeConnection,
-    timeline: &mut RealtimeTimeline,
-    audio_rx: &mut mpsc::Receiver<AudioBlock>,
-    mut deferred_audio: Option<&mut Vec<AudioBlock>>,
-) -> anyhow::Result<Option<String>> {
-    drain_realtime_events(app, state, ws, timeline, PREFLUSH_EVENT_DRAIN_TIMEOUT).await?;
-
-    let should_commit = timeline.has_committable_audio();
-    if !should_commit && !timeline.has_pending_turns() {
-        return Ok(None);
-    }
-
-    if should_commit && let Err(error) = ws.commit_audio().await {
-        return Ok(Some(format!(
-            "最後の音声を確定できませんでした。未保存の発話がある可能性があります: {error:#}"
-        )));
-    }
-
+    speech_rx: &mut mpsc::UnboundedReceiver<anyhow::Result<AppleSpeechEvent>>,
+    session_started_at: DateTime<Local>,
+) -> anyhow::Result<()> {
     let deadline = tokio::time::sleep(FLUSH_TIMEOUT);
     tokio::pin!(deadline);
-    let mut saw_commit = !should_commit;
-    let collect_deferred_audio = deferred_audio.is_some();
 
     loop {
-        if saw_commit && !timeline.has_pending_turns() {
-            return Ok(None);
-        }
-
         tokio::select! {
-            event = ws.next_event(timeline) => {
-                match event? {
-                    RealtimeEvent::Committed => {
-                        saw_commit = true;
-                    }
-                    RealtimeEvent::TranscriptSegment(segment) => {
-                        append_transcript_segment(&state.paths.output_directory, &segment)?;
-                        emit_snapshot(app, state, "transcript_segment_written").await;
-                    }
-                    RealtimeEvent::CommitRejected(_) => {
-                        if !timeline.has_pending_turns() {
-                            return Ok(None);
-                        }
-                        saw_commit = true;
-                    }
-                    RealtimeEvent::ApiError(message) => {
-                        return Ok(Some(format!(
-                            "最後の音声の保存確認中にRealtime APIエラーが発生しました。未保存の発話がある可能性があります: {message}"
-                        )));
-                    }
-                    RealtimeEvent::Ignored => {}
+            maybe_event = speech_rx.recv() => {
+                let event = maybe_event.context("Apple SpeechTranscriber event stream closed while stopping")??;
+                if matches!(event, AppleSpeechEvent::Stopped) {
+                    return Ok(());
                 }
-            }
-            maybe_block = audio_rx.recv(), if collect_deferred_audio => {
-                if let Some(block) = maybe_block
-                    && let Some(buffer) = deferred_audio.as_deref_mut()
-                {
-                    buffer.push(block);
-                }
+                handle_speech_event(app, state, event, session_started_at).await?;
             }
             () = &mut deadline => {
-                return Ok(Some(format!(
-                    "最後の音声の保存確認が{}秒以内に完了しませんでした。未保存の発話がある可能性があります。",
+                anyhow::bail!(
+                    "Apple SpeechTranscriber の停止処理が{}秒以内に完了しませんでした。未保存の発話がある可能性があります。",
                     FLUSH_TIMEOUT.as_secs()
-                )));
+                );
             }
         }
     }
 }
 
-async fn handle_realtime_event(
+async fn handle_speech_event(
     app: &AppHandle,
     state: &SharedAppState,
-    event: RealtimeEvent,
+    event: AppleSpeechEvent,
+    session_started_at: DateTime<Local>,
 ) -> anyhow::Result<()> {
     match event {
-        RealtimeEvent::TranscriptSegment(segment) => {
+        AppleSpeechEvent::Segment(segment) => {
+            let segment = transcript_segment_from_apple(segment, session_started_at)?;
             append_transcript_segment(&state.paths.output_directory, &segment)?;
             emit_snapshot(app, state, "transcript_segment_written").await;
         }
-        RealtimeEvent::ApiError(message) => {
-            anyhow::bail!("Realtime API error: {message}");
+        AppleSpeechEvent::Error { message } => {
+            anyhow::bail!("Apple SpeechTranscriber error: {message}");
         }
-        RealtimeEvent::CommitRejected(message) => {
-            anyhow::bail!("Realtime API rejected audio commit: {message}");
-        }
-        RealtimeEvent::Committed | RealtimeEvent::Ignored => {}
+        AppleSpeechEvent::Ready | AppleSpeechEvent::Stopped => {}
     }
     Ok(())
 }
 
-async fn drain_realtime_events(
-    app: &AppHandle,
-    state: &SharedAppState,
-    ws: &mut RealtimeConnection,
-    timeline: &mut RealtimeTimeline,
-    idle_timeout: Duration,
-) -> anyhow::Result<()> {
-    loop {
-        match timeout(idle_timeout, ws.next_event(timeline)).await {
-            Ok(event) => handle_realtime_event(app, state, event?).await?,
-            Err(_) => return Ok(()),
-        }
+fn transcript_segment_from_apple(
+    segment: AppleSpeechSegment,
+    session_started_at: DateTime<Local>,
+) -> anyhow::Result<TranscriptSegment> {
+    let local_start = session_started_at + chrono_duration_from_secs(segment.start_offset_secs)?;
+    let local_end = session_started_at + chrono_duration_from_secs(segment.end_offset_secs)?;
+
+    Ok(TranscriptSegment {
+        segment_type: "transcript_segment",
+        local_start,
+        local_end,
+        session_id: segment.session_id,
+        item_id: segment.item_id,
+        previous_item_id: segment.previous_item_id,
+        text: segment.text,
+        received_at: Local::now(),
+    })
+}
+
+fn chrono_duration_from_secs(seconds: f64) -> anyhow::Result<ChronoDuration> {
+    if !seconds.is_finite() || seconds.is_sign_negative() {
+        anyhow::bail!("invalid Apple SpeechTranscriber audio offset: {seconds}");
     }
+    Ok(ChronoDuration::from_std(Duration::from_secs_f64(seconds))?)
 }
 
 #[cfg(test)]
@@ -292,11 +214,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rotation_deadline_is_50_minutes_after_session_start() {
-        let started_at = Instant::now();
+    fn converts_apple_segment_offsets_to_local_timestamps() {
+        let origin = DateTime::parse_from_rfc3339("2026-05-05T09:15:00+09:00")
+            .unwrap()
+            .with_timezone(&Local);
+        let segment = transcript_segment_from_apple(
+            AppleSpeechSegment {
+                session_id: "apple-session".to_string(),
+                item_id: "apple_1".to_string(),
+                previous_item_id: None,
+                text: "今日の作業を始めます。".to_string(),
+                start_offset_secs: 2.0,
+                end_offset_secs: 4.5,
+            },
+            origin,
+        )
+        .unwrap();
+
+        assert_eq!(segment.local_start, origin + ChronoDuration::seconds(2));
         assert_eq!(
-            next_rotation_deadline(started_at).duration_since(started_at),
-            ROTATE_AFTER
+            segment.local_end,
+            origin + ChronoDuration::milliseconds(4_500)
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_apple_segment_offset() {
+        let error = chrono_duration_from_secs(f64::NAN).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("invalid Apple SpeechTranscriber")
         );
     }
 }
