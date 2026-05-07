@@ -1,6 +1,7 @@
 use std::{sync::mpsc as std_mpsc, thread, time::Duration};
 
 use anyhow::{Context, bail};
+use chrono::{DateTime, Duration as ChronoDuration, Local};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
@@ -13,11 +14,18 @@ use crate::{
 #[derive(Debug)]
 pub(crate) struct AudioBlock {
     pub(crate) pcm: Vec<u8>,
+    pub(crate) captured_at: DateTime<Local>,
+    pub(crate) duration: ChronoDuration,
 }
 
 impl AudioBlock {
-    fn new(pcm: Vec<u8>) -> Self {
-        Self { pcm }
+    fn new(pcm: Vec<u8>, captured_at: DateTime<Local>) -> Self {
+        let duration = pcm_duration(&pcm);
+        Self {
+            pcm,
+            captured_at,
+            duration,
+        }
     }
 }
 
@@ -197,7 +205,13 @@ fn send_audio_block(
     if pcm.is_empty() {
         return;
     }
-    let _ = sender.try_send(AudioBlock::new(pcm));
+    let _ = sender.try_send(AudioBlock::new(pcm, Local::now()));
+}
+
+fn pcm_duration(pcm: &[u8]) -> ChronoDuration {
+    let sample_count = i64::try_from(pcm.len() / 2).expect("PCM sample count fits i64");
+    let nanos = sample_count.saturating_mul(1_000_000_000) / i64::from(TARGET_SAMPLE_RATE);
+    ChronoDuration::nanoseconds(nanos)
 }
 
 fn resample_to_pcm16_mono(samples: &[f32], source_rate: u32, source_channels: u16) -> Vec<u8> {
@@ -251,6 +265,12 @@ mod tests {
         let source = vec![0.5_f32, 0.5, -0.5, -0.5, 0.25, 0.25, -0.25, -0.25];
         let pcm = resample_to_pcm16_mono(&source, 48_000, 2);
         assert_eq!(pcm.len(), 4);
+    }
+
+    #[test]
+    fn computes_pcm16_mono_duration_at_target_sample_rate() {
+        let pcm = vec![0_u8; usize::try_from(TARGET_SAMPLE_RATE).unwrap() * 2];
+        assert_eq!(pcm_duration(&pcm), ChronoDuration::seconds(1));
     }
 
     #[test]
