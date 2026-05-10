@@ -33,13 +33,16 @@ pub(crate) fn transcript_paths(output_directory: &Path, date: DateTime<Local>) -
     }
 }
 
-pub(crate) fn ensure_daily_files(paths: &TranscriptPaths) -> anyhow::Result<()> {
+pub(crate) fn ensure_daily_files(
+    paths: &TranscriptPaths,
+    date: DateTime<Local>,
+) -> anyhow::Result<()> {
     if let Some(parent) = paths.markdown.parent() {
         fs::create_dir_all(parent)?;
     }
     if !paths.markdown.exists() {
-        let date = Local::now().format("%Y-%m-%d");
-        fs::write(&paths.markdown, format!("# {date}\n\n"))?;
+        let date_label = date.format("%Y-%m-%d");
+        fs::write(&paths.markdown, format!("# {date_label}\n\n"))?;
     }
     if !paths.jsonl.exists() {
         fs::write(&paths.jsonl, "")?;
@@ -51,12 +54,13 @@ pub(crate) fn append_transcript_segment(
     output_directory: &Path,
     segment: &TranscriptSegment,
 ) -> anyhow::Result<()> {
-    let paths = transcript_paths(output_directory, segment.local_start);
-    ensure_daily_files(&paths)?;
+    let output_date = segment.local_end;
+    let paths = transcript_paths(output_directory, output_date);
+    ensure_daily_files(&paths, output_date)?;
 
     if !segment.text.is_empty() {
         let mut markdown = OpenOptions::new().append(true).open(&paths.markdown)?;
-        let heading = format!("## {}\n", segment.local_start.format("%H:%M"));
+        let heading = format!("## {}\n", output_date.format("%H:%M"));
         let markdown_content = fs::read_to_string(&paths.markdown)?;
         if !markdown_content.contains(&heading) {
             writeln!(markdown, "\n{}", heading.trim_end())?;
@@ -110,5 +114,41 @@ mod tests {
         assert!(jsonl.contains("\"session_id\":\"sess_test\""));
         assert!(jsonl.contains("\"previous_item_id\":null"));
         assert!(!jsonl.contains("\"model\""));
+    }
+
+    #[test]
+    fn writes_cross_day_segment_to_end_date_files() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let segment = TranscriptSegment {
+            segment_type: "transcript_segment",
+            local_start: DateTime::parse_from_rfc3339("2026-05-10T23:59:58+09:00")
+                .unwrap()
+                .with_timezone(&Local),
+            local_end: DateTime::parse_from_rfc3339("2026-05-11T00:00:04+09:00")
+                .unwrap()
+                .with_timezone(&Local),
+            session_id: "sess_test".to_string(),
+            item_id: "item_test".to_string(),
+            previous_item_id: None,
+            text: "日付をまたいだ発話です。".to_string(),
+            received_at: DateTime::parse_from_rfc3339("2026-05-11T00:00:05+09:00")
+                .unwrap()
+                .with_timezone(&Local),
+        };
+
+        append_transcript_segment(directory.path(), &segment).expect("write segment");
+
+        let next_day_markdown = directory.path().join("2026-05-11.md");
+        let previous_day_markdown = directory.path().join("2026-05-10.md");
+        assert!(next_day_markdown.exists());
+        assert!(!previous_day_markdown.exists());
+
+        let markdown = fs::read_to_string(next_day_markdown).expect("read markdown");
+        let jsonl =
+            fs::read_to_string(directory.path().join("2026-05-11.jsonl")).expect("read jsonl");
+        assert!(markdown.contains("# 2026-05-11"));
+        assert!(markdown.contains("## 00:00"));
+        assert!(markdown.contains("- [23:59:58-00:00:04] 日付をまたいだ発話です。"));
+        assert!(jsonl.contains("\"local_end\":\"2026-05-11T00:00:04+09:00\""));
     }
 }

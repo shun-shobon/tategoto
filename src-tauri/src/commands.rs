@@ -64,8 +64,9 @@ pub(crate) async fn open_today_markdown(
     state: State<'_, SharedAppState>,
     app: AppHandle,
 ) -> Result<AppSnapshot, CommandError> {
-    let paths = transcript_paths(&state.paths.output_directory, chrono::Local::now());
-    ensure_daily_files(&paths)?;
+    let today = chrono::Local::now();
+    let paths = transcript_paths(&state.paths.output_directory, today);
+    ensure_daily_files(&paths, today)?;
     app.opener()
         .open_path(paths.markdown.to_string_lossy().to_string(), None::<&str>)
         .map_err(|error| anyhow!("{error}"))?;

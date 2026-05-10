@@ -171,6 +171,10 @@ local start/end timestamp は、SpeechTranscriber result の audio offset を、
 audio block の取得時刻へ対応付けて作る。Mac のスリープなどで wall-clock time と音声
 offset がずれた場合も、復帰後の発話は復帰後の実時刻として保存する。
 
+保存先の日別ファイルは segment の local end date で決める。スリープ中の日付変更や、
+日付をまたいで final result が確定する発話でも、確定した発話が終わった日のファイルへ
+追記する。
+
 ## UI
 
 主 UI はメニューバー常駐にする。Dock に常時出る通常ウィンドウアプリより、録音状態を
