@@ -6,7 +6,5 @@
   <true/>
   <key>NSMicrophoneUsageDescription</key>
   <string>Tategoto records microphone audio to transcribe speech and save transcripts locally.</string>
-  <key>NSSpeechRecognitionUsageDescription</key>
-  <string>Tategoto uses Apple SpeechTranscriber to transcribe microphone audio on this Mac.</string>
 </dict>
 </plist>

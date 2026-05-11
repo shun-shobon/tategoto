@@ -50,7 +50,6 @@ private final class TategotoSpeechSession: @unchecked Sendable {
   func start(config: TategotoSpeechConfig) {
     Task {
       do {
-        try await requestSpeechAuthorization()
         guard SpeechTranscriber.isAvailable else {
           throw TategotoSpeechError("SpeechTranscriber is not available on this Mac.")
         }
@@ -259,33 +258,6 @@ private final class TategotoSpeechSession: @unchecked Sendable {
     @unknown default:
       throw TategotoSpeechError("Unknown SpeechTranscriber asset status.")
     }
-  }
-
-  private func requestSpeechAuthorization() async throws {
-    let status = SFSpeechRecognizer.authorizationStatus()
-    if status == .authorized {
-      return
-    }
-
-    guard isRunningFromAppBundle else {
-      throw TategotoSpeechError(
-        "Speech recognition permission cannot be requested from `pnpm tauri dev`. macOS requires a bundled .app with NSSpeechRecognitionUsageDescription. Run the bundled Tategoto.app once to grant Speech Recognition permission."
-      )
-    }
-
-    let requested = await withCheckedContinuation { continuation in
-      SFSpeechRecognizer.requestAuthorization { status in
-        continuation.resume(returning: status)
-      }
-    }
-
-    guard requested == .authorized else {
-      throw TategotoSpeechError("Speech recognition permission was not granted.")
-    }
-  }
-
-  private var isRunningFromAppBundle: Bool {
-    Bundle.main.bundleURL.pathExtension == "app"
   }
 
   private func emitError(_ message: String) {
