@@ -16,10 +16,11 @@ pub(crate) fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let stop = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &start, &stop, &quit])?;
+    let initial_status = TranscriptionStatus::Idle;
 
     TrayIconBuilder::with_id(TRAY_ID)
-        .title("○ 待機中")
-        .tooltip("Tategoto")
+        .title(tray_status_title(&initial_status))
+        .tooltip(tray_status_tooltip(&initial_status))
         .menu(&menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => show_main_window(app),
@@ -64,10 +65,19 @@ pub(crate) async fn update_tray_status(app: &AppHandle, state: &SharedAppState) 
         model.status.clone()
     };
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let (marker, label) = tray_status_label(&status);
-        let _ = tray.set_title(Some(format!("{marker} {label}")));
-        let _ = tray.set_tooltip(Some(format!("Tategoto: {label}")));
+        let _ = tray.set_title(Some(tray_status_title(&status).to_string()));
+        let _ = tray.set_tooltip(Some(tray_status_tooltip(&status)));
     }
+}
+
+fn tray_status_title(status: &TranscriptionStatus) -> &'static str {
+    let (marker, _) = tray_status_label(status);
+    marker
+}
+
+fn tray_status_tooltip(status: &TranscriptionStatus) -> String {
+    let (_, label) = tray_status_label(status);
+    format!("Tategoto: {label}")
 }
 
 fn tray_status_label(status: &TranscriptionStatus) -> (&'static str, &'static str) {
@@ -83,5 +93,36 @@ fn show_main_window(app: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tray_title_uses_status_icon_only() {
+        assert_eq!(tray_status_title(&TranscriptionStatus::Idle), "○");
+        assert_eq!(tray_status_title(&TranscriptionStatus::Recording), "●");
+        assert_eq!(
+            tray_status_title(&TranscriptionStatus::StoppedWithError),
+            "!"
+        );
+    }
+
+    #[test]
+    fn tray_tooltip_keeps_status_label() {
+        assert_eq!(
+            tray_status_tooltip(&TranscriptionStatus::Idle),
+            "Tategoto: 待機中"
+        );
+        assert_eq!(
+            tray_status_tooltip(&TranscriptionStatus::Recording),
+            "Tategoto: 録音中"
+        );
+        assert_eq!(
+            tray_status_tooltip(&TranscriptionStatus::StoppedWithError),
+            "Tategoto: エラー"
+        );
     }
 }
